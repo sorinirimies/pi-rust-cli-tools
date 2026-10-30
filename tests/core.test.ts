@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { check, detect, promptSection, TOOLS } from "../extensions/rust-cli-tools.ts";
+import { check, detect, onPath, promptSection, TOOLS } from "../extensions/rust-cli-tools.ts";
 
 const all = new Set<string>(TOOLS);
 const none = new Set<string>();
@@ -8,9 +8,36 @@ describe("detect", () => {
 	test("keeps only names `which` accepts", () => {
 		expect([...detect(["rg", "nope", "fd"], (n) => n !== "nope")]).toEqual(["rg", "fd"]);
 	});
-	test("finds sh on the real PATH", () => {
-		expect(detect(["sh", "definitely-not-a-tool-xyz"]).has("sh")).toBe(true);
+	test("finds git on the real PATH (every CI runner, Windows included)", () => {
+		expect(detect(["git", "definitely-not-a-tool-xyz"]).has("git")).toBe(true);
 		expect(detect(["definitely-not-a-tool-xyz"]).size).toBe(0);
+	});
+});
+
+describe("onPath", () => {
+	const calls: [string, string[]][] = [];
+	const spawn = (status: number | null, stdout: string) => (cmd: string, args: string[]) => {
+		calls.push([cmd, args]);
+		return { status, stdout };
+	};
+
+	test("asks `where` on Windows, `command -v` elsewhere", () => {
+		calls.length = 0;
+		expect(onPath("rg", "win32", spawn(0, "C:\\bin\\rg.exe\r\n"))).toBe(true);
+		expect(onPath("rg", "linux", spawn(0, "/usr/bin/rg\n"))).toBe(true);
+		expect(calls).toEqual([["where", ["rg"]], ["/bin/sh", ["-c", "command -v rg"]]]);
+	});
+
+	test("a failed lookup or empty output is not found", () => {
+		expect(onPath("rg", "win32", spawn(1, ""))).toBe(false);
+		expect(onPath("rg", "darwin", spawn(0, "  \n"))).toBe(false);
+		expect(onPath("rg", "linux", spawn(null, null as unknown as string))).toBe(false);
+	});
+
+	test("never passes anything but a plain name to a shell", () => {
+		calls.length = 0;
+		for (const bad of ["rg; rm -rf /", "$(id)", "a b", "", "`x`"]) expect(onPath(bad, "linux", spawn(0, "x"))).toBe(false);
+		expect(calls).toEqual([]);
 	});
 });
 
