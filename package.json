@@ -1,6 +1,6 @@
 {
   "name": "pi-rust-cli-tools",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Pi extension that detects which modern Rust CLI tools are installed (rg, fd, bat, lsd, eza, dust, procs...) and steers the agent to them: lists them in the system prompt and blocks recursive grep / find / ls / du / ps calls that have an installed replacement.",
   "keywords": ["pi-package", "pi-extension", "rust", "cli", "ripgrep", "fd", "bash", "tools"],
   "license": "MIT",

@@ -3,6 +3,18 @@
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org). Do not edit by hand.
 
+## [0.1.2](https://github.com/sorinirimies/pi-rust-cli-tools/releases/tag/v0.1.2) — 2026-10-31
+
+
+### 🔧 Build & CI
+
+- One nightly (GitHub); Gitea mirrors GitHub's main and tags hourly ([`86cc490`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/86cc490c2a74a98e21cb10ba2272a0064590ac72))
+
+### 🧹 Chores
+
+- Nightly dev-tooling lockfile update 2026-10-31 (not released) ([`c2319a5`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/c2319a5d1ebcbc7fe787e91d9f18da3cb2842314))
+- Nightly dev-tooling lockfile update 2026-10-31 (not released) ([`b764a9a`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/b764a9a3132cca2a553178bf901a4ef80981341b))
+- Merge Gitea's main (both hosts ran their own nightly) ([`728f7cd`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/728f7cdfd4baae9a6700c2b5aaeaf0293fae90b9))
 ## [0.1.1](https://github.com/sorinirimies/pi-rust-cli-tools/releases/tag/v0.1.1) — 2026-10-30
 
 
