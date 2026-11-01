@@ -1,88 +1,106 @@
 /**
- * pi-rust-cli-tools: tells the agent which modern CLI tools are installed and blocks
- * direct file-search / listing calls that have an installed replacement.
+ * pi-rust-cli-tools: steers the agent to fast modern CLI tools (rg, fd, lsd) when they are
+ * installed. A `grep -r`, `find -name` or `ls -l` is rewritten to the modern tool before it
+ * runs (or, in block mode, refused with a hint); the system prompt names what is installed.
  *
- * Only the first stage of a top-level command is checked: pipe filters (`cmd | grep x`),
- * `find -exec`, and anything that is not a plain command start are left alone.
- * Zero prompt tokens beyond a one-paragraph tool list appended to the system prompt.
+ * Pure logic lives in core/ and command/ (tested directly); this file only wires it to pi.
+ * Settings persist in <agent dir>/rust-cli-tools.json.
  */
-import { spawnSync } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { completions, parseCommand } from "./command/parse.ts";
+import { type Config, DEFAULT_CONFIG, readConfig, saveConfig } from "./core/config.ts";
+import { promptSection } from "./core/prompt.ts";
+import { applyEdits, findings, RULES } from "./core/rules.ts";
+import { detect } from "./core/tools.ts";
 
-export const TOOLS = ["rg", "fd", "bat", "lsd", "eza", "sd", "dust", "procs", "hyperfine", "tokei", "delta", "difft", "jq", "just"] as const;
+type StatusUi = { ui: { setStatus(key: string, text: string): void } };
 
-type Spawn = (cmd: string, args: string[], opts: { encoding: "utf8" }) => { status: number | null; stdout: string };
+/** Test hook: which tools count as installed. Without it the real PATH is asked. */
+let detector: (() => Set<string>) | undefined;
+export const useDetector = (fn: (() => Set<string>) | undefined): void => {
+	detector = fn;
+};
+const installed = (): Set<string> => (detector ? detector() : detect());
 
-/**
- * Whether `name` resolves on PATH. Windows has no /bin/sh, so it asks `where`; everywhere
- * else `command -v` in /bin/sh. Only plain tool names are looked up (nothing reaches a shell
- * unquoted). `platform` and `spawn` are injectable for tests.
- */
-export function onPath(name: string, platform: string = process.platform, spawn: Spawn = spawnSync): boolean {
-	if (!/^[\w.+-]+$/.test(name)) return false;
-	const r = platform === "win32" ? spawn("where", [name], { encoding: "utf8" }) : spawn("/bin/sh", ["-c", `command -v ${name}`], { encoding: "utf8" });
-	return r.status === 0 && (r.stdout ?? "").trim().length > 0;
-}
-
-/** Names from `names` that resolve on PATH. `which` is injectable for tests. */
-export function detect(names: readonly string[] = TOOLS, which: (name: string) => boolean = (n) => onPath(n)): Set<string> {
-	return new Set(names.filter(which));
-}
-
-/** A hint when `command` should use an installed modern tool, otherwise undefined. */
-export function check(command: string, have: ReadonlySet<string>): string | undefined {
-	// Split on ; && || and newlines. A single `|` is a pipeline: only its first stage is checked.
-	for (const raw of command.split(/;|&&|\|\||\n/)) {
-		const seg = raw.trim().split(/(?<!\|)\|(?!\|)/)[0].trim();
-		if (/^(grep|egrep)\b/.test(seg) && /\s-[a-zA-Z]*[rR]|\s--recursive/.test(seg) && have.has("rg"))
-			return "Use `rg` instead of recursive grep (e.g. `rg -n pattern path`; add `-uu` to include ignored files).";
-		if (/^find\s/.test(seg) && /\s-(i?name|type)\b/.test(seg) && !/\s-(exec|delete|mtime|size|perm)\b/.test(seg) && have.has("fd"))
-			return "Use `fd` instead of find (e.g. `fd -e rs pattern path`; add `-HI` for hidden/ignored files).";
-		if (/^ls(\s|$)/.test(seg) && !/\|/.test(raw)) {
-			const t = have.has("lsd") ? "lsd" : have.has("eza") ? "eza" : undefined;
-			if (t) return `Use \`${t}\` instead of ls (e.g. \`${t} -la\`).`;
-		}
-		if (/^du\s/.test(seg) && have.has("dust")) return "Use `dust -d1` instead of du.";
-		if (/^ps(\s|$)/.test(seg) && have.has("procs")) return "Use `procs <name>` instead of ps.";
-	}
-	return undefined;
-}
-
-/** The paragraph appended to the system prompt. */
-export function promptSection(have: ReadonlySet<string>, all: readonly string[] = TOOLS): string {
-	const missing = all.filter((t) => !have.has(t));
-	return (
-		`\n\n## Modern CLI tools (auto-detected)\nInstalled: ${[...have].join(", ") || "none"}.\n` +
-		(missing.length ? `Not installed (use classic fallbacks): ${missing.join(", ")}.\n` : "") +
-		"In bash, prefer rg over grep -r, fd over find, lsd/eza over ls, dust over du, procs over ps. " +
-		"Direct recursive grep/find/ls calls may be blocked with a hint. Prefer pi read/edit/write over cat/sed."
-	);
-}
+export const settingsText = (c: Config): string => [`mode ${c.mode}`, ...RULES.map((r) => `${r} ${c.rules[r] ? "on" : "off"}`)].join(" · ");
 
 export default function (pi: ExtensionAPI) {
+	let config: Config = { ...DEFAULT_CONFIG, rules: { ...DEFAULT_CONFIG.rules } };
 	let have = new Set<string>();
 	let detected = false;
+	let rewritten = 0;
 	const ensure = () => {
 		if (!detected) {
-			have = detect();
+			have = installed();
 			detected = true;
 		}
 	};
+	const showStatus = (ctx: StatusUi) => ctx.ui.setStatus("rust-cli-tools", config.mode !== "off" && config.showStatus && rewritten > 0 ? `cli: ${rewritten} rewritten` : "");
 
-	pi.on("session_start", async () => {
-		have = detect();
+	pi.on("session_start", async (_event, ctx) => {
+		const { config: loaded, problem } = await readConfig();
+		config = loaded;
+		have = installed();
 		detected = true;
+		if (problem) ctx.ui.notify(`rust-cli-tools: ${problem}; using the defaults`, "warning");
+		showStatus(ctx);
 	});
 
 	pi.on("before_agent_start", async (event) => {
+		if (config.mode === "off") return undefined;
 		ensure();
-		return { systemPrompt: event.systemPrompt + promptSection(have) };
+		return { systemPrompt: event.systemPrompt + promptSection(have, config.mode) };
 	});
 
-	pi.on("tool_call", async (event) => {
-		if (event.toolName !== "bash") return undefined;
+	pi.on("tool_call", async (event, ctx) => {
+		if (event.toolName !== "bash" || config.mode === "off" || config.mode === "hint") return undefined;
+		const input = event.input as { command?: unknown };
+		if (typeof input.command !== "string") return undefined;
 		ensure();
-		const hint = check(String((event.input as { command?: string }).command ?? ""), have);
-		return hint ? { block: true, reason: `${hint} Re-run the command with the modern tool.` } : undefined;
+		const found = findings(input.command, have, config.rules);
+		if (!found.length) return undefined;
+		// Rewrite mode needs every finding to have a safe rewrite; otherwise the agent is asked to retry by hand.
+		const stuck = config.mode === "block" ? found[0] : found.find((f) => !f.edits);
+		if (stuck) return { block: true, reason: `${stuck.hint} Re-run the command with the modern tool.` };
+		input.command = applyEdits(input.command, found.flatMap((f) => f.edits!));
+		rewritten++;
+		showStatus(ctx);
+		return undefined;
+	});
+
+	pi.registerCommand("rust-cli-tools", {
+		description: "pi-rust-cli-tools: status, on, off, mode rewrite|block|hint|off, grep|find|ls on|off",
+		getArgumentCompletions: (prefix: string) => completions(prefix),
+		handler: async (args, ctx) => {
+			const cmd = parseCommand(args);
+			// The setting applies to this session either way; a failed save only means it is not remembered.
+			const persist = async () => {
+				try {
+					await saveConfig(config);
+				} catch (error) {
+					ctx.ui.notify(`rust-cli-tools: could not save the setting (${(error as Error)?.message ?? String(error)}); it applies to this session only`, "warning");
+				}
+				showStatus(ctx);
+			};
+			switch (cmd.kind) {
+				case "status":
+					ensure();
+					ctx.ui.notify(`rust-cli-tools ${settingsText(config)}\ninstalled: ${[...have].join(", ") || "none"} · ${rewritten} command${rewritten === 1 ? "" : "s"} rewritten this session`, "info");
+					return;
+				case "mode":
+					config.mode = cmd.mode;
+					await persist();
+					ctx.ui.notify(`rust-cli-tools: mode ${cmd.mode}`, "info");
+					return;
+				case "rule":
+					config.rules[cmd.rule] = cmd.on;
+					await persist();
+					ctx.ui.notify(`rust-cli-tools: ${cmd.rule} ${cmd.on ? "on" : "off"}`, "info");
+					return;
+				case "invalid":
+					ctx.ui.notify(cmd.message, "warning");
+					return;
+			}
+		},
 	});
 }

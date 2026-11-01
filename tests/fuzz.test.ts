@@ -1,15 +1,18 @@
 // Randomised robustness tests ("fuzzing" without extra dependencies).
 //
-// Every bash command the agent runs goes through `check`, so it must survive any text and
-// never block a command for a tool that is not installed. The generator is seeded, so a
-// failure prints a seed that reproduces it exactly:
+// Every bash command the agent runs goes through `findings`, so it must survive any text, never
+// touch a command inside quotes, and never rewrite for a tool that is not installed. The
+// generator is seeded, so a failure prints a seed that reproduces it exactly:
 //
 //   FUZZ_SEED=12345 bun test tests/fuzz.test.ts --config=bunfig.fuzz.toml
 //   FUZZ_ITERS=200000 bun test tests/fuzz.test.ts --config=bunfig.fuzz.toml   (the nightly workflow)
 import { describe, expect, it } from "bun:test";
-import { check, onPath, promptSection, TOOLS } from "../extensions/rust-cli-tools.ts";
+import { completions, parseCommand } from "../extensions/command/parse.ts";
+import { sanitizeConfig } from "../extensions/core/config.ts";
+import { applyEdits, findings, type Rule } from "../extensions/core/rules.ts";
+import { statements } from "../extensions/core/shell.ts";
+import { onPath, TOOLS } from "../extensions/core/tools.ts";
 
-const KEYS: string[] = [];
 const ITERS = Number(process.env.FUZZ_ITERS ?? 400);
 const SEED = Number(process.env.FUZZ_SEED ?? Math.floor(Math.random() * 2 ** 31));
 
@@ -28,9 +31,7 @@ function rng(seed: number) {
 function gen(seed: number) {
 	const r = rng(seed);
 	const int = (n: number) => Math.floor(r() * n);
-	const pick = <T>(xs: readonly T[]): T => xs[int(xs.length)];
-	const NASTY = [0, -0, 1, -1, 0.5, NaN, Infinity, -Infinity, 1e308, -1e308, 2 ** 53, 2 ** 31, 1e-300, Number.MAX_SAFE_INTEGER];
-	const number = () => (r() < 0.5 ? pick(NASTY) : (r() - 0.5) * 10 ** int(16));
+	const pick = <T>(xs: readonly T[]): T => xs[int(xs.length)]!;
 	/** Printable ASCII, mostly; sometimes control characters and lone surrogates. */
 	const string = (max = 24) => {
 		const len = int(max);
@@ -38,20 +39,7 @@ function gen(seed: number) {
 		for (let i = 0; i < len; i++) s += String.fromCharCode(r() < 0.8 ? 32 + int(95) : int(0xd800));
 		return s;
 	};
-	const value = (depth = 0): unknown => {
-		const k = int(depth > 2 ? 6 : 9);
-		if (k === 0) return number();
-		if (k === 1) return string();
-		if (k === 2) return null;
-		if (k === 3) return undefined;
-		if (k === 4) return r() < 0.5;
-		if (k === 5) return pick(["", "NaN", "0", "-5", "1e999", "true"]);
-		if (k === 6) return Array.from({ length: int(4) }, () => value(depth + 1));
-		const o: Record<string, unknown> = {};
-		for (let i = 0; i < int(5); i++) o[KEYS.length && r() < 0.6 ? pick(KEYS) : string()] = value(depth + 1);
-		return o;
-	};
-	return { r, int, pick, number, string, value };
+	return { r, int, pick, string };
 }
 type Gen = ReturnType<typeof gen>;
 
@@ -68,68 +56,80 @@ function fuzz(name: string, fn: (g: Gen) => void | Promise<void>, iters = ITERS)
 	});
 }
 
-const WORDS = ["grep", "egrep", "find", "ls", "du", "ps", "rg", "fd", "cat", "echo", "-r", "-R", "-rn", "--recursive", "-name", "-iname", "-type", "f", "-exec", "-delete", "{}", "\\;", "-la", "-d1", "aux", ".", "src", "'*.ts'", "|", "||", "&&", ";", "\n", "$(ls)", "`ls`", "sudo", "cd"];
-const HINTS = new Set([
-	"Use `rg` instead of recursive grep (e.g. `rg -n pattern path`; add `-uu` to include ignored files).",
-	"Use `fd` instead of find (e.g. `fd -e rs pattern path`; add `-HI` for hidden/ignored files).",
-	"Use `lsd` instead of ls (e.g. `lsd -la`).",
-	"Use `eza` instead of ls (e.g. `eza -la`).",
-	"Use `dust -d1` instead of du.",
-	"Use `procs <name>` instead of ps.",
-]);
-/** The tool a hint asks for. */
-const toolOf = (hint: string) => /^Use `(\w+)/.exec(hint)?.[1] ?? "";
+const WORDS = [
+	"grep", "egrep", "fgrep", "find", "ls", "du", "ps", "rg", "fd", "lsd", "cat", "echo", "-r", "-R", "-rn", "-rniw", "--recursive", "-A", "3", "-e", "-name", "-iname", "-type", "f", "d", "-exec", "-delete", "{}", "\\;",
+	"-la", "-l", "-d1", "aux", ".", "src", "'*.ts'", '"a b"', "|", "||", "&&", ";", "&", "\n", "$(ls)", "`ls`", "sudo", "cd", ">", "2>&1", "<<EOF", "EOF", "#", "--include=*.ts", "-maxdepth", "2", "FOO=1", "\\", "'", '"', "(", ")",
+];
+const command = (g: Gen): string => Array.from({ length: 1 + g.int(12) }, () => (g.r() < 0.85 ? g.pick(WORDS) : g.string(10))).join(g.pick([" ", " ", "  ", "\t"]));
 
-function command(g: Gen): string {
-	const n = 1 + g.int(10);
-	return Array.from({ length: n }, () => (g.r() < 0.8 ? g.pick(WORDS) : g.string(12))).join(g.pick([" ", " ", "  ", "\t"]));
-}
-const installed = (g: Gen): Set<string> => new Set(TOOLS.filter(() => g.r() < 0.5));
+const ALL = new Set(["rg", "fd", "lsd", "eza"]);
+const ON: Record<Rule, boolean> = { grep: true, find: true, ls: true };
 
-describe("fuzz: check", () => {
-	fuzz("never throws; a hint is one of the known ones and names an installed tool", (g) => {
-		const have = installed(g);
-		const hint = check(g.r() < 0.1 ? g.string(200) : command(g), have);
-		if (hint === undefined) return;
-		expect(HINTS.has(hint)).toBe(true);
-		expect(have.has(toolOf(hint))).toBe(true);
-	});
-
-	fuzz("nothing installed: nothing is ever blocked", (g) => {
-		expect(check(command(g), new Set())).toBeUndefined();
-	});
-
-	fuzz("a filter after a pipe is never blocked (only the first stage counts)", (g) => {
-		const first = g.pick(["echo hi", "cat x", "rg foo", "git log"]);
-		expect(check(`${first} | ${command(g).replace(/;|&&|\|\||\n/g, " ")}`, new Set(TOOLS))).toBeUndefined();
-	});
-
-	fuzz("the hint does not depend on surrounding blanks", (g) => {
+describe("fuzz: shell and rules", () => {
+	fuzz("statements never throw and every word is a slice of the original", (g) => {
 		const c = command(g);
-		const have = installed(g);
-		expect(check(`  ${c}\t`, have)).toBe(check(c, have));
+		for (const st of statements(c)) for (const w of [...st.words, ...st.redirects]) expect(c.slice(w.start, w.end)).toBe(w.raw);
+		statements(g.string(60));
+	});
+
+	fuzz("findings never throw; edits stay inside the command and never overlap", (g) => {
+		const c = command(g);
+		const edits = findings(c, ALL, ON).flatMap((f) => f.edits ?? []);
+		const sorted = [...edits].sort((a, b) => a.start - b.start);
+		for (const [i, e] of sorted.entries()) {
+			expect(e.start).toBeGreaterThanOrEqual(0);
+			expect(e.end).toBeLessThanOrEqual(c.length);
+			if (i) expect(e.start).toBeGreaterThanOrEqual(sorted[i - 1]!.end);
+		}
+		applyEdits(c, edits);
+	});
+
+	fuzz("a rewritten command asks for nothing more", (g) => {
+		const c = command(g);
+		const found = findings(c, ALL, ON);
+		if (found.some((f) => !f.edits)) return;
+		const again = findings(applyEdits(c, found.flatMap((f) => f.edits!)), ALL, ON);
+		expect(again).toEqual([]);
+	});
+
+	fuzz("a command inside quotes is never touched", (g) => {
+		const inner = command(g).replace(/['\\\n]/g, " ");
+		expect(findings(`echo '${inner}'`, ALL, ON)).toEqual([]);
+		expect(findings(`git commit -m '${inner}'`, ALL, ON)).toEqual([]);
+		expect(findings(`cat <<EOF\n${inner.replace(/EOF/g, "")}\nEOF`, ALL, ON)).toEqual([]);
+	});
+
+	fuzz("nothing is found for a tool that is not installed, or a rule that is off", (g) => {
+		const c = command(g);
+		expect(findings(c, new Set(), ON)).toEqual([]);
+		expect(findings(c, ALL, { grep: false, find: false, ls: false })).toEqual([]);
+		const partial = new Set(g.pick([["rg"], ["fd"], ["lsd"]]));
+		for (const f of findings(c, partial, ON)) expect({ rg: "grep", fd: "find", lsd: "ls" }[[...partial][0]!]).toBe(f.rule);
 	});
 });
 
-describe("fuzz: onPath and promptSection", () => {
-	fuzz("onPath sends only plain names to a shell", (g) => {
-		const name = g.r() < 0.5 ? g.string(16) : g.pick([...TOOLS]);
-		let asked: string[] | undefined;
-		const found = onPath(name, g.pick(["linux", "darwin", "win32"]), (_cmd, args) => {
-			asked = args;
-			return { status: g.pick([0, 1, null]), stdout: g.string() };
-		});
-		expect(typeof found).toBe("boolean");
-		if (asked) expect(/^[\w.+-]+$/.test(name)).toBe(true);
+describe("fuzz: command, config, onPath", () => {
+	fuzz("parseCommand and completions never throw", (g) => {
+		const s = g.string(30);
+		parseCommand(s);
+		completions(s);
+		completions(g.pick(["", "mo", "mode ", "grep ", "x"]) + s);
 	});
 
-	fuzz("promptSection lists every tool exactly once, installed or not", (g) => {
-		const have = installed(g);
-		const text = promptSection(have);
-		const installedLine = /Installed: (.*)\.\n/.exec(text)?.[1] ?? "";
-		const missingLine = /Not installed \(use classic fallbacks\): (.*)\.\n/.exec(text)?.[1] ?? "";
-		const listed = [...installedLine.split(", "), ...missingLine.split(", ")].filter((t) => t && t !== "none");
-		expect(listed.sort()).toEqual([...TOOLS].sort());
-		for (const t of have) expect(installedLine.split(", ")).toContain(t);
+	fuzz("sanitizeConfig always gives a valid config, whatever the input", (g) => {
+		const raw = g.pick([undefined, null, 5, "x", [], { mode: g.string(6), rules: g.pick([null, "x", { grep: g.string(3), find: 1 }]), showStatus: g.string(2) }]);
+		const c = sanitizeConfig(raw);
+		expect(["rewrite", "block", "hint", "off"]).toContain(c.mode);
+		expect(Object.keys(c.rules).sort()).toEqual(["find", "grep", "ls"]);
+		expect(typeof c.showStatus).toBe("boolean");
+	});
+
+	fuzz("onPath refuses anything but a plain name without running anything", (g) => {
+		let ran = 0;
+		const name = g.string(12);
+		const ok = onPath(name, "linux", () => (ran++, { status: 0, stdout: "x" }));
+		if (!/^[\w.+-]+$/.test(name)) expect(ran).toBe(0);
+		expect(ok).toBe(ran > 0);
+		expect(TOOLS.length).toBeGreaterThan(0);
 	});
 });
