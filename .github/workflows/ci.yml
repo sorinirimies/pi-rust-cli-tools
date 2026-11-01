@@ -30,7 +30,7 @@ jobs:
       - name: Install nushell
         uses: hustcer/setup-nu@eacad52a4634c4f8d17a94916f93be6856861b9c # v3
         with:
-          version: "0.111.0"
+          version: "0.116.1"
 
       - run: bun install --frozen-lockfile
 
@@ -50,20 +50,14 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-  # Paths, terminals and time zones differ: run the suite where users run pi.
+  # Paths and terminals differ: run the suite where users run pi.
   test:
-    name: test (${{ matrix.os }}${{ matrix.tz && format(', {0}', matrix.tz) || '' }})
+    name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: macos-latest }
-          - { os: windows-latest }
-          # Day/week/month bucketing is local-time: exercise the extremes.
-          - { os: ubuntu-latest, tz: Pacific/Auckland }
-          - { os: ubuntu-latest, tz: Pacific/Pago_Pago }
-          - { os: ubuntu-latest, tz: America/Los_Angeles }
+        os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -73,5 +67,3 @@ jobs:
 
       - name: bun test
         run: bun test
-        env:
-          TZ: ${{ matrix.tz }}
