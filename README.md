@@ -3,6 +3,8 @@
 [![npm](https://img.shields.io/npm/v/pi-rust-cli-tools.svg)](https://www.npmjs.com/package/pi-rust-cli-tools)
 [![CI](https://github.com/sorinirimies/pi-rust-cli-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/sorinirimies/pi-rust-cli-tools/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Audit](https://github.com/sorinirimies/pi-rust-cli-tools/actions/workflows/security.yml/badge.svg)](https://github.com/sorinirimies/pi-rust-cli-tools/actions/workflows/security.yml)
+[![Fuzz](https://github.com/sorinirimies/pi-rust-cli-tools/actions/workflows/fuzz.yml/badge.svg)](https://github.com/sorinirimies/pi-rust-cli-tools/actions/workflows/fuzz.yml)
 
 A [pi](https://github.com/earendil-works/pi-coding-agent) extension that steers the agent to fast modern CLI tools (`rg`, `fd`, `lsd`, `eza`, `dust`, `procs`, ...) **only when they are installed**.
 
