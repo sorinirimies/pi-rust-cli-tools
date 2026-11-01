@@ -6,7 +6,7 @@
 [![Audit](https://github.com/sorinirimies/pi-rust-cli-tools/actions/workflows/security.yml/badge.svg)](https://github.com/sorinirimies/pi-rust-cli-tools/actions/workflows/security.yml)
 [![Fuzz](https://github.com/sorinirimies/pi-rust-cli-tools/actions/workflows/fuzz.yml/badge.svg)](https://github.com/sorinirimies/pi-rust-cli-tools/actions/workflows/fuzz.yml)
 
-A [pi](https://github.com/earendil-works/pi-coding-agent) extension that steers the agent to fast modern CLI tools (`rg`, `fd`, `lsd`, `eza`, `dust`, `procs`, ...) **only when they are installed**.
+A [pi](https://github.com/earendil-works/pi-coding-agent) extension that steers the agent to fast modern CLI tools (`rg`, `fd`, `lsd`, ...) **only when they are installed**.
 
 ## What it does
 
@@ -21,6 +21,8 @@ A [pi](https://github.com/earendil-works/pi-coding-agent) extension that steers 
 | `ls -la src` | `lsd -la src` | `lsd` |
 
 Details that keep the meaning intact:
+
+* `rg` and `fd` skip hidden and git-ignored files, `grep -r` and `find` do not. That is the point (no `node_modules`, no `target/`), but search an ignored path with `/rust-cli-tools mode off` or `grep off`.
 
 * grep flags map one to one (`-i -w -l -c -v -F -P -o -q`, `-A/-B/-C N`, `-m N`, `-e`, `-f`, `--include`/`--exclude`/`--exclude-dir` to `-g`), `-n` is added so the output has line numbers, and a path is always named (`rg` would read stdin otherwise).
 * Only the command is rewritten: quotes, redirections, pipes, `cd x &&` and the rest of the line stay as they were.
