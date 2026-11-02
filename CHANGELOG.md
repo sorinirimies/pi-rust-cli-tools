@@ -3,6 +3,40 @@
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org). Do not edit by hand.
 
+## [0.1.3](https://github.com/sorinirimies/pi-rust-cli-tools/releases/tag/v0.1.3) — 2026-11-02
+
+
+### ✨ Features
+
+- Rewrite grep -r, find -name and ls -l to rg, fd and lsd instead of blocking; quote-aware parser; modes, persisted settings and /rust-cli-tools command ([`9be3c1d`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/9be3c1d5220243e3a703fc1b3b324197d5605ab0))
+
+### 🐛 Fixes
+
+- Spell a basic grep regex for rg so ( ) + ? | { } stay literal; map -x; refuse -f patterns and back-references that rg reads differently ([`64f67d8`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/64f67d894331997465379446840834c79e8906aa))
+- **ci:** A 409 from the other host publishing the same version first is not a failure; add release-gitea-starscream and pull-gitea-starscream recipes ([`58b96c5`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/58b96c5c45f77041b1cc285d0f63e79b9d07c249))
+
+### 📚 Docs
+
+- **readme:** Add the Audit and Fuzz badges ([`d561c31`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/d561c313554273ec4f72657c267fabb2e9169953))
+- Describe the rewrite behaviour and the ignored-files difference ([`11fcd48`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/11fcd48596466711732b948c758d98cb097ee77b))
+- This repo's agent rules as a project skill in .agents/skills ([`77aea53`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/77aea53346135c5d177bd4aa7e5d36c26868e731))
+- Drop the per-repo agent rules skill; the shared skills cover it ([`23069c3`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/23069c3647bf799b24ee2810494dd5d9ca91ddee))
+
+### 🧪 Tests
+
+- Seeded fuzz tests (FUZZ_ITERS / FUZZ_SEED; a failure prints the seed that reproduces it) ([`98410c3`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/98410c307d7cc838ef8e44c78ccc330a1dbc1014))
+
+### 🔧 Build & CI
+
+- Fuzz and Security workflows on GitHub and Gitea ([`abef557`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/abef557668292a22f681dd8b4c07f6a15ccc1cf3))
+- **deps-dev:** Pin minimatch 11.0.3 via overrides ([`b015526`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/b01552652e82a7e2b987b3d38686160115cd4ced))
+- Move to the Nushell template layout (scripts, workflows, justfile) ([`06ff3cc`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/06ff3cc98ab746c25964919a2d688040c5092c89))
+- Cut a release from the Release workflow (bump, changelog, tag, push, publish) ([`4be5dad`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/4be5dad9638bad6efb66bffd55caafdb6d3ce9ef))
+
+### 🧹 Chores
+
+- Nightly dev-tooling lockfile update 2026-11-01 (not released) ([`b1e2bd3`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/b1e2bd3991afb1ad9930316eab38264e369954fc))
+- Ignore .codegraph index ([`51d3dd3`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/51d3dd364059d351e17d2d5d4619a23d8ff18350))
 ## [0.1.2](https://github.com/sorinirimies/pi-rust-cli-tools/releases/tag/v0.1.2) — 2026-10-31
 
 
