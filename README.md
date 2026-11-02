@@ -58,6 +58,10 @@ bun install
 just check   # typecheck + tests (95% coverage gate) + pack check + nu script tests
 ```
 
+Releases run in CI: **Actions → Release → Run workflow** with a bump (`patch`, `minor`, `major`), or
+`just release-ci minor`. The workflow runs the quality gate, bumps `package.json`, regenerates
+`CHANGELOG.md` with git-cliff, commits, tags, pushes and publishes to npm (secret `NPM_TOKEN`).
+
 ## License
 
 MIT
