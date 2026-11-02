@@ -26,7 +26,8 @@ Details that keep the meaning intact:
 
 * grep flags map one to one (`-i -w -l -c -v -F -P -o -q`, `-A/-B/-C N`, `-m N`, `-e`, `-f`, `--include`/`--exclude`/`--exclude-dir` to `-g`), `-n` is added so the output has line numbers, and a path is always named (`rg` would read stdin otherwise).
 * Only the command is rewritten: quotes, redirections, pipes, `cd x &&` and the rest of the line stay as they were.
-* What cannot be said the same way (a GNU regex like `\(a\|b\)`, `find -o`, `-path`, an unknown flag) is **blocked** with a hint instead, and the agent retries by hand.
+* A basic regex (grep without `-E`) is spelled for rg: `grep -rn 'fn main()'` becomes `rg -n 'fn main\(\)'`, since `( ) + ? | { }` are plain characters to grep and operators to rg. `-x`/`--line-regexp` maps to `-x`.
+* What cannot be said the same way (a GNU regex like `\(a\|b\)`, a back-reference, patterns from `-f` in a basic regex, `find -o`, `-path`, an unknown flag) is **blocked** with a hint instead, and the agent retries by hand.
 * Plain `ls`, `du`, `ps`, `grep` without `-r`, `find -exec/-delete/-mtime/...` and anything inside a quote, a heredoc or `$(...)` are left alone. `ls -l | wc -l` is left alone too (`ls -l` prints a `total` line).
 
 ## Modes and settings

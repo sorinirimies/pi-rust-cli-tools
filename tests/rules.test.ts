@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { applyEdits, findings, quote, RULES, type Rule } from "../extensions/core/rules.ts";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { onPath } from "../extensions/core/tools.ts";
+import { applyEdits, basicToRg, findings, quote, RULES, type Rule } from "../extensions/core/rules.ts";
 
 const all = new Set(["rg", "fd", "lsd", "eza"]);
 const on: Record<Rule, boolean> = { grep: true, find: true, ls: true };
@@ -41,7 +46,10 @@ describe("grep -r becomes rg", () => {
 		["grep -rn -m5 foo .", "rg -n -m 5 foo ."],
 		["grep -rn -e foo -e bar .", "rg -n -e foo -e bar ."],
 		["grep -rn -efoo .", "rg -n -e foo ."],
-		["grep -rn -f pats.txt .", "rg -n -f pats.txt ."],
+		["grep -rnF -f pats.txt .", "rg -n -F -f pats.txt ."],
+		["grep -rnE -f pats.txt .", "rg -n -f pats.txt ."],
+		["grep -rnx foo .", "rg -n -x foo ."],
+		["grep -rn --line-regexp foo .", "rg -n -x foo ."],
 		["grep -rn --include='*.ts' foo .", "rg -n -g '*.ts' foo ."],
 		["grep -rn --include '*.ts' foo .", "rg -n -g '*.ts' foo ."],
 		["grep -rn --exclude=*.min.js foo .", "rg -n -g '!*.min.js' foo ."],
@@ -57,7 +65,8 @@ describe("grep -r becomes rg", () => {
 		["grep -rn --files-without-match --fixed-strings foo .", "rg -n --files-without-match -F foo ."],
 		["grep -rn --perl-regexp x .", "rg -n -P x ."],
 		["grep -rn --extended-regexp 'a|b' .", "rg -n 'a|b' ."],
-		["grep -rn --regexp=foo --file=p .", "rg -n -e foo -f p ."],
+		["grep -rnE --regexp=foo --file=p .", "rg -n -e foo -f p ."],
+		["grep -rn -e foo -i .", "rg -n -i -e foo ."],
 		["grep -rn --max-count=3 --after-context=1 --before-context=2 --context=3 x .", "rg -n -m 3 -A 1 -B 2 -C 3 x ."],
 		["grep -rn --with-filename --no-filename --only-matching --quiet --silent --text --no-messages --line-buffered x .", "rg -n -H --no-filename -o -q -a --no-messages --line-buffered x ."],
 		["grep -rn --dereference-recursive x .", "rg -n -L x ."],
@@ -72,6 +81,21 @@ describe("grep -r becomes rg", () => {
 		["grep -rn foo . ; grep -rn bar .", "rg -n foo . ; rg -n bar ."],
 	])("%s", (cmd, want) => {
 		expect(plan(cmd)).toBe(want);
+	});
+
+	test("a basic regex is spelled for rg: its + ? | { } ( ) are plain characters", () => {
+		expect(plan("grep -rn 'fn main()' src")).toBe("rg -n 'fn main\\(\\)' src");
+		expect(plan("grep -rn 'a|b' .")).toBe("rg -n 'a\\|b' .");
+		expect(plan("grep -rn -e 'x{2}' -e '*y' .")).toBe("rg -n -e 'x\\{2\\}' -e '\\*y' .");
+		expect(plan("grep -rnE 'a|b' .")).toBe("rg -n 'a|b' .");
+		expect(plan("grep -rnF 'a|b' .")).toBe("rg -n -F 'a|b' .");
+		expect(plan("grep -rn \"\\.txt$\" .")).toBe('rg -n "\\.txt$" .');
+	});
+
+	test("patterns in a file or a back-reference in an extended regex cannot be spelled for rg", () => {
+		for (const c of ["grep -rn -f pats.txt .", "grep -rn --file=p -e x .", "grep -rnE '(a)\\1' .", "grep -rn -E -e '(a)\\1' ."]) expect(plan(c)).toBe("stuck");
+		expect(plan("grep -rnP '(a)\\1' .")).toBe("rg -n -P '(a)\\1' .");
+		expect(plan("grep -rnEF '\\1' .")).toBe("rg -n -F '\\1' .");
 	});
 
 	test("a basic regex with GNU escapes cannot be rewritten, so it is left to the agent", () => {
@@ -113,7 +137,7 @@ describe("find -name becomes fd", () => {
 	});
 
 	test("anything fd cannot say the same is left to the agent", () => {
-		for (const c of ["find . -name a -name b", "find . -name a -o -name b", "find . -type x", "find . -type", "find . -name", "find . -maxdepth x -name a", "find . -path '*/x' -name y", "find . ! -name x", "find . -newer f -name x"]) expect(plan(c)).toBe("stuck");
+		for (const c of ["find . -name a -name b", "find . -name a -o -name b", "find . -type x", "find . -type", "find . -name", "find . -maxdepth x -name a", "find . -path '*/x' -name y", "find . ! -name x", "find . -newer f -name x", "find . -name 'a/b'"]) expect(plan(c)).toBe("stuck");
 	});
 
 	test("exec, delete, size, mtime and perm are never touched; no name or type means nothing to gain", () => {
@@ -181,5 +205,40 @@ describe("quote and applyEdits", () => {
 	test("edits apply from the end, leaving the rest of the command alone", () => {
 		expect(applyEdits("aaa bbb ccc", [{ start: 0, end: 3, text: "X" }, { start: 8, end: 11, text: "ZZZZ" }])).toBe("X bbb ZZZZ");
 		expect(applyEdits("abc", [])).toBe("abc");
+	});
+});
+
+describe("basicToRg", () => {
+	test.each([
+		["fn main()", "fn main\\(\\)"],
+		["a+b?", "a\\+b\\?"],
+		["*foo", "\\*foo"],
+		["^*x", "^\\*x"],
+		["a^b$c", "a\\^b\\$c"],
+		["a$", "a$"],
+		["[(|)]", "[(|)]"],
+		["[]a]", "[\\]a]"],
+		["[^]a]", "[^\\]a]"],
+		["[[:alpha:]_]+", "[[:alpha:]_]\\+"],
+		["[a[b]", "[a\\[b]"],
+		["\\.txt$", "\\.txt$"],
+		["\\w\\s\\b\\*\\[\\]\\^\\$\\\\\\-", "\\w\\s\\b\\*\\[\\]\\^\\$\\\\\\-"],
+	])("%s", (bre, rg) => {
+		expect(basicToRg(bre)).toBe(rg);
+	});
+
+	test("what rg would read differently is refused", () => {
+		for (const p of ["[\\.]", "a\\|b", "\\(a\\)", "a**", "trailing\\", "\\/x", "[a&&b]", "[a--b]", "[a~~b]", "[[.a.]]", "[[=a=]]", "[abc", "[[:alpha:", "\\<w\\>", "\\1"]) expect(basicToRg(p)).toBeUndefined();
+	});
+});
+
+describe("basicToRg against the real tools", () => {
+	const LINES = ["fn main()", "fn main", "a|b", "a", "a+b?", "aab", "x{2}", "xx", "*foo", "foo", "a^b$c", "(", ")", "]", "q]a", "_alpha", "file.txt", "filetxt", "word_1", "[", "a[b"];
+	const PATTERNS = ["fn main()", "a|b", "a+b?", "x{2}", "*foo", "^*x", "a^b$c", "a$", "[(|)]", "[]a]", "[^]a]", "[[:alpha:]_]+", "[a[b]", "\\.txt$", "\\w+", "^a", "a.b", "x*", "\\[", "\\*foo", "[[:digit:]]$"];
+	test.skipIf(!onPath("rg") || !onPath("grep"))("rg finds exactly the lines grep finds", () => {
+		const dir = mkdtempSync(join(tmpdir(), "rct-bre-"));
+		writeFileSync(join(dir, "t.txt"), `${LINES.join("\n")}\n`);
+		const run = (cmd: string, args: string[]) => spawnSync(cmd, args, { cwd: dir, encoding: "utf8" }).stdout;
+		for (const p of PATTERNS) expect(run("rg", ["-n", "--no-heading", "--", basicToRg(p)!, "t.txt"]), p).toBe(run("grep", ["-n", "--", p, "t.txt"]));
 	});
 });

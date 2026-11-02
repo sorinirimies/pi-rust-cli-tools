@@ -28,12 +28,13 @@ export function quote(s: string): string {
 // ── grep → rg ────────────────────────────────────────────────────────────────
 
 /** Short grep flags that mean the same to rg. */
-const SAME = new Set("nilwcvFPHqoa");
+const SAME = new Set("nilwxcvFPHqoa");
 /** Long grep flags that mean the same to rg: name → rg flag. */
 const LONG: Record<string, string> = {
 	"line-number": "-n",
 	"ignore-case": "-i",
 	"word-regexp": "-w",
+	"line-regexp": "-x",
 	"files-with-matches": "-l",
 	"files-without-match": "--files-without-match",
 	count: "-c",
@@ -59,11 +60,9 @@ const LONG_VALUE: Record<string, (v: string) => string[]> = {
 	"after-context": (v) => ["-A", quote(v)],
 	"before-context": (v) => ["-B", quote(v)],
 	context: (v) => ["-C", quote(v)],
-	regexp: (v) => ["-e", quote(v)],
-	file: (v) => ["-f", quote(v)],
 };
 const DROPPED_LONG = new Set(["recursive", "extended-regexp", "basic-regexp"]);
-const VALUE_SHORT: Record<string, string> = { A: "-A", B: "-B", C: "-C", m: "-m", e: "-e", f: "-f" };
+const VALUE_SHORT: Record<string, string> = { A: "-A", B: "-B", C: "-C", m: "-m" };
 
 const isRecursive = (args: Word[]): boolean => {
 	for (const a of args) {
@@ -73,6 +72,55 @@ const isRecursive = (args: Word[]): boolean => {
 	}
 	return false;
 };
+
+/** Escapes a basic regex may use that mean the same to rg. */
+const SAME_ESCAPE = /[.*[\]^$\\wWsSbB-]/;
+
+/**
+ * A POSIX basic regex (grep without -E/-F/-P) spelled for rg, or undefined when that cannot be
+ * done exactly. In a basic regex `+ ? | { } ( )` are plain characters and the GNU escapes
+ * `\( \| \{` are the operators; rg reads them the other way round.
+ */
+export function basicToRg(p: string): string | undefined {
+	let out = "";
+	for (let i = 0; i < p.length; i++) {
+		const c = p[i]!;
+		if (c === "\\") {
+			const next = p[++i];
+			if (next === undefined || !SAME_ESCAPE.test(next)) return undefined;
+			out += c + next;
+		} else if (c === "[") {
+			const end = bracketEnd(p, i);
+			if (end === undefined) return undefined;
+			const body = p.slice(i + 1, end);
+			// grep reads a backslash in [...] literally; rg nests on `[` and has && -- ~~ set operators.
+			if (/\\|&&|--|~~|\[[.=]/.test(body)) return undefined;
+			out += `[${body.replace(/\[(?!:)|(?<!:)\]/g, (b, at: number) => (at === 0 || (at === 1 && body[0] === "^") ? `\\${b}` : b === "[" ? "\\[" : b))}]`;
+			i = end;
+		} else if ("+?|{}()".includes(c)) out += `\\${c}`;
+		else if (c === "*" && (out === "" || out === "^")) out += "\\*";
+		else if (c === "*" && p[i - 1] === "*") return undefined;
+		else if (c === "^" && i > 0) out += "\\^";
+		else if (c === "$" && i < p.length - 1) out += "\\$";
+		else out += c;
+	}
+	return out;
+}
+
+/** Index of the `]` closing the bracket expression opened at `start`, skipping [:class:] names. */
+function bracketEnd(p: string, start: number): number | undefined {
+	let i = start + 1;
+	if (p[i] === "^") i++;
+	if (p[i] === "]") i++; // a leading ] is a member, not the end
+	for (; i < p.length; i++) {
+		if (p[i] === "[" && p[i + 1] === ":") {
+			const close = p.indexOf(":]", i + 2);
+			if (close < 0) return undefined;
+			i = close + 1;
+		} else if (p[i] === "]") return i;
+	}
+	return undefined;
+}
 
 /** The rg arguments equivalent to these grep arguments, or undefined when some part has no safe equivalent. */
 function rewriteGrep(args: Word[], kind: "grep" | "egrep" | "fgrep"): string[] | undefined {
@@ -84,8 +132,9 @@ function rewriteGrep(args: Word[], kind: "grep" | "egrep" | "fgrep"): string[] |
 	};
 	if (kind === "fgrep") flag("-F");
 	const positionals: Word[] = [];
+	const exprs: string[] = []; // -e / --regexp values
+	let patternFile: string | undefined; // -f / --file
 	let afterDashes = false;
-	let patternFlag = false;
 	let regexKind = kind !== "grep"; // -E, -F or -P: the pattern is not a POSIX basic regex
 	let reportsLines = false; // -n given, or an output mode where line numbers make no sense
 	for (let i = 0; i < args.length; i++) {
@@ -111,11 +160,12 @@ function rewriteGrep(args: Word[], kind: "grep" | "egrep" | "fgrep"): string[] |
 				flag(LONG[name]!);
 				if (name === "fixed-strings" || name === "perl-regexp") regexKind = true;
 				if (["line-number", "count", "files-with-matches", "files-without-match", "quiet", "silent"].includes(name)) reportsLines = true;
-			} else if (LONG_VALUE[name]) {
+			} else if (LONG_VALUE[name] || name === "regexp" || name === "file") {
 				value ??= args[++i]?.text;
 				if (value === undefined) return undefined;
-				flags.push(...LONG_VALUE[name]!(value));
-				if (name === "regexp" || name === "file") patternFlag = true;
+				if (name === "regexp") exprs.push(value);
+				else if (name === "file") patternFile = value;
+				else flags.push(...LONG_VALUE[name]!(value));
 			} else return undefined;
 		} else {
 			for (let j = 1; j < t.length; j++) {
@@ -129,27 +179,35 @@ function rewriteGrep(args: Word[], kind: "grep" | "egrep" | "fgrep"): string[] |
 				} else if (c === "L") (flag("--files-without-match"), (reportsLines = true));
 				else if (c === "s") flag("--no-messages");
 				else if (c === "h") flag("--no-filename");
-				else if (VALUE_SHORT[c]) {
+				else if (VALUE_SHORT[c] || c === "e" || c === "f") {
 					const rest = t.slice(j + 1);
 					const value = rest || args[++i]?.text;
 					if (value === undefined) return undefined;
-					flags.push(VALUE_SHORT[c]!, quote(value));
-					if (c === "e" || c === "f") patternFlag = true;
+					if (c === "e") exprs.push(value);
+					else if (c === "f") patternFile = value;
+					else flags.push(VALUE_SHORT[c]!, quote(value));
 					break;
 				} else return undefined;
 			}
 		}
 	}
-	const patterns = patternFlag ? [] : positionals.slice(0, 1);
-	const paths = patternFlag ? positionals : positionals.slice(1);
+	const patternFlag = exprs.length > 0 || patternFile !== undefined;
 	if (!patternFlag && !positionals.length) return undefined;
-	// A basic regex with GNU escapes means something else to rg: leave those to the agent.
+	const pattern = patternFlag ? undefined : positionals[0]!;
+	const paths = patternFlag ? positionals : positionals.slice(1);
+	// The patterns as rg must see them: a basic regex is translated, a back-reference has no rg equivalent.
+	let spell = (s: string): string | undefined => s;
 	if (!regexKind) {
-		const texts = [...patterns.map((p) => p.text), ...flags.filter((_, i) => flags[i - 1] === "-e")];
-		if (texts.some((p) => /\\[(){}|+?<>]|\\[1-9]/.test(p))) return undefined;
-	}
+		if (patternFile !== undefined) return undefined; // patterns in a file cannot be translated
+		spell = basicToRg;
+	} else if (!flags.includes("-F") && !flags.includes("-P")) spell = (s) => (/\\[1-9]/.test(s) ? undefined : s);
+	const spelled = [...exprs, ...(pattern ? [pattern.text] : [])].map(spell);
+	if (spelled.some((s) => s === undefined)) return undefined;
+	const eArgs = exprs.flatMap((_, i) => ["-e", quote(spelled[i]!)]);
+	const fArgs = patternFile === undefined ? [] : ["-f", quote(patternFile)];
+	const patternArg = pattern ? [spelled.at(-1) === pattern.text ? pattern.raw : quote(spelled.at(-1)!)] : [];
 	// Without a path rg could read stdin instead of the directory: always name it.
-	return [...(reportsLines ? [] : ["-n"]), ...flags, ...(afterDashes ? ["--"] : []), ...patterns.map((p) => p.raw), ...(paths.length ? paths.map((p) => p.raw) : ["."])];
+	return [...(reportsLines ? [] : ["-n"]), ...flags, ...eArgs, ...fArgs, ...(afterDashes ? ["--"] : []), ...patternArg, ...(paths.length ? paths.map((p) => p.raw) : ["."])];
 }
 
 // ── find → fd ────────────────────────────────────────────────────────────────
@@ -166,7 +224,8 @@ function rewriteFind(args: Word[]): string[] | undefined {
 		const t = args[i]!.text;
 		if (t === "-name" || t === "-iname") {
 			const v = value();
-			if (name || !v) return undefined;
+			// A `/` never matches a find -name, but makes fd -g compare the whole path.
+			if (name || !v || v.text.includes("/")) return undefined;
 			name = v;
 			ignoreCase = t === "-iname";
 		} else if (t === "-type") {
