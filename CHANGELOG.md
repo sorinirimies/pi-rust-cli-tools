@@ -3,6 +3,24 @@
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org). Do not edit by hand.
 
+## [0.1.4](https://github.com/sorinirimies/pi-rust-cli-tools/releases/tag/v0.1.4) — 2026-11-09
+
+
+### 🐛 Fixes
+
+- **ci:** Nightly commit step accepts bool arg from nu ([`6c0f06f`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/6c0f06f92d86a232ffd090b83200f03d97a6fb0c))
+
+### 🔧 Build & CI
+
+- **deps:** Bump Gitea workflow actions ([`1a07785`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/1a07785a36a8ff483638d24d4cfee9b17535198d))
+- Dependency policy (licenses, sources, bans) in the gate and security workflow ([`17b10b1`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/17b10b13e05a9d3fe5e4e96b7df88541445000f6))
+- **deps:** Bump taiki-e/install-action from 2.87.32 to 2.88.1 (#2) ([`5d66133`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/5d66133fd40c9b0ba6f7737c08115fbaaa4529fd))
+- Scan the git history for secrets with gitleaks ([`fe4436c`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/fe4436c7f5aeb30fdd6e7c33c55748e78a98d6bf))
+- **deps:** Bump taiki-e/install-action from 2.88.1 to 2.90.2 (#3) ([`4ec4c0f`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/4ec4c0fd7ac51221adb24600fbf943919c48f761))
+
+### 🧹 Chores
+
+- Nightly dev-tooling lockfile update 2026-11-09 (not released) ([`811f530`](https://github.com/sorinirimies/pi-rust-cli-tools/commit/811f530aadb62bdfaa1cac8b43954984e62cb663))
 ## [0.1.3](https://github.com/sorinirimies/pi-rust-cli-tools/releases/tag/v0.1.3) — 2026-11-02
 
 

@@ -1,6 +1,6 @@
 {
   "name": "pi-rust-cli-tools",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Pi extension that detects which modern CLI tools are installed (rg, fd, lsd, eza, ...), tells the agent, and rewrites grep -r, find -name and ls -l to rg, fd and lsd before they run.",
   "keywords": ["pi-package", "pi-extension", "rust", "cli", "ripgrep", "fd", "bash", "tools"],
   "license": "MIT",
